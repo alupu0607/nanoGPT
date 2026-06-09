@@ -4,7 +4,7 @@ import subprocess, os, time, torch, json, math
 # M_VALUES = [1, 5, 10, 20]
 
 RUN_ORDER  = [0, 16, 32, 64, 80, 100, 256, 512, 760]
-M_VALUES = [5, 10, 20]
+M_VALUES = [1, 5, 10, 20]
 TASK      = "wikitext2"
 
 results         = []
@@ -14,6 +14,8 @@ LR = 0.1 # established as best from LR sweep
 MODEL_TYPE = "gpt2-medium"
 N_EMBD = 1024
 MODEL_TAG = "gpt2medium"
+BATCH_SIZE = 1
+GRAD_ACCUM_STEPS = 20
 # base_warmup = 200
 # base_lr_decay = 5000
 # base_eval_interval = 250
@@ -63,6 +65,9 @@ for L in RUN_ORDER:
                 f"--learning_rate={LR}",
                 f"--out_dir={out_dir}",
                 f"--block_size={MAX_POSITIONS}",
+                f"--batch_size={BATCH_SIZE}",
+                f"--gradient_accumulation_steps={GRAD_ACCUM_STEPS}",
+                "--compile=False",
                 f"--prefix_type=soft",
                 f"--wandb_run_name={run_name}",
                 f"--prefix_cache=True",
@@ -125,6 +130,6 @@ for r in results:
 if training_errors:
     print(f"\nFailed L values: {training_errors}")
 
-with open("/kaggle/working/h2_cacheon_summary.json", "w") as f:
+with open(f"/kaggle/working/h2_{MODEL_TAG}_cacheon_summary.json", "w") as f:
     json.dump(results, f, indent=2)
-print("\nSaved: /kaggle/working/h2_gpt2medium_cacheon_summary.json")
+print(f"\nSaved: /kaggle/working/h2_{MODEL_TAG}_cacheon_summary.json")

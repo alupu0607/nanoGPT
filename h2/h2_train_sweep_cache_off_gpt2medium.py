@@ -4,8 +4,8 @@ import subprocess, os, time, torch, json, math
 # RUN_ORDER  = [0, 16, 32, 64, 80, 100, 256, 512, 760]
 # M_VALUES = [1, 5, 10, 20]
 
-RUN_ORDER = [760]  # L=100 first — smoke test
-M_VALUES = [1,5]
+RUN_ORDER = [0, 16, 32, 64, 80, 100, 256, 512, 760]
+M_VALUES = [1, 5, 10, 20]
 
 TASK      = "wikitext2"
 
@@ -15,6 +15,8 @@ MAX_POSITIONS = 1024
 MODEL_TYPE = "gpt2-medium"
 N_EMBD = 1024
 MODEL_TAG = "gpt2medium"
+BATCH_SIZE = 1
+GRAD_ACCUM_STEPS = 20
 LR = 0.1 # established as best from LR sweep
 
 for L in RUN_ORDER:
@@ -22,7 +24,7 @@ for L in RUN_ORDER:
         if L == 0 and M > M_VALUES[0]:
             continue
         run_name = f"prefix-L{L}-m{M}-cacheoff-{TASK}-{MODEL_TAG}"
-        out_dir  = f"/kaggle/working/h2_cacheoff_L{L}_m{M}-{MODEL_TAG}"
+        out_dir  = f"/kaggle/working/h2_{MODEL_TAG}_cacheoff_L{L}_m{M}"
         os.makedirs(out_dir, exist_ok=True)
 
         print(f"\n{'='*60}")
@@ -58,6 +60,9 @@ for L in RUN_ORDER:
             f"--out_dir={out_dir}",
             f"--max_iters=2500",
             f"--learning_rate={LR}",
+            f"--batch_size={BATCH_SIZE}",
+            f"--gradient_accumulation_steps={GRAD_ACCUM_STEPS}",
+            "--compile=False",
             f"--prefix_type=soft",
             f"--wandb_run_name={run_name}",
         ] + extra_flags
@@ -119,6 +124,6 @@ for r in results:
 if training_errors:
     print(f"\nFailed (L, m) pairs: {training_errors}")
 
-with open("/kaggle/working/h2_gpt2medium_cacheoff_summary.json", "w") as f:
+with open(f"/kaggle/working/h2_{MODEL_TAG}_cacheoff_summary.json", "w") as f:
     json.dump(results, f, indent=2)
-print("\nSaved: /kaggle/working/h2_gpt2medium_cacheoff_summary.json")
+print(f"\nSaved: /kaggle/working/h2_{MODEL_TAG}_cacheoff_summary.json")

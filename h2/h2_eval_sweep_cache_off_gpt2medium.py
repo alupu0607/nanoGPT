@@ -26,6 +26,8 @@ MODEL_TYPE = 'gpt2-medium'
 MODEL_TAG = "gpt2medium"
 MAX_POSITIONS = 1024
 EVAL_WITH_CACHE = False
+EVAL_BATCH_SIZE = 1
+EVAL_SEED = 1337
 
 def download_artifact(L, m, task):
     if L == 0:
@@ -65,10 +67,13 @@ def load_checkpoint(L, m, task):
     saved = torch.load(prefix_path, map_location="cpu")
     saved_model_type = saved.get("model", MODEL_TYPE)
     saved_prefix_len = int(saved.get("prefix_len", L))
+    # Training stores the reduced token context (1024 - L). Keep this fallback
+    # for older artifacts that predate the block_size checkpoint field.
     saved_block_size = int(saved.get("block_size", MAX_POSITIONS - saved_prefix_len))
     saved_m = int(saved.get("prefix_update_period", m))
 
     model = GPT.from_pretrained(saved_model_type, dict(dropout=DROPOUT))
+    model.crop_block_size(saved_block_size)
     model.eval().to(DEVICE)
     for p in model.parameters():
         p.requires_grad = False
@@ -136,12 +141,13 @@ def get_training_metrics(L, m, task):
 
 def estimate_val_perplexity(model, soft_prefix, data_path,
                              token_block_size=None,
-                             batch_size=6, eval_iters=50, use_cache=False):
-    prefix_len = 0 if soft_prefix is None else soft_prefix.prefix_len
-    max_token_block_size = model.config.block_size - prefix_len
-    block_size = token_block_size or max_token_block_size
-    block_size = min(block_size, max_token_block_size)
-    assert block_size > 0, "prefix length must be smaller than the model block size"
+                             batch_size=EVAL_BATCH_SIZE, eval_iters=50, use_cache=False):
+    # Reproduce the training context saved in the artifact. For these
+    # experiments it is 1024 - L.
+    block_size = token_block_size or model.config.block_size
+    block_size = min(block_size, model.config.block_size)
+    assert block_size > 0
+    torch.manual_seed(EVAL_SEED)
     data       = np.memmap(data_path, dtype=np.uint16, mode='r')
     ctx        = torch.amp.autocast(device_type='cuda', dtype=torch.float16)
     losses     = []
@@ -237,7 +243,7 @@ for r in results:
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
 eval_run = wandb.init(
     project  = PROJECT,
-    name     = f"h2-eval-summary-{TASK}-cache-{EVAL_WITH_CACHE}-{timestamp}",
+    name     = f"h2-eval-{MODEL_TAG}-{TASK}-cacheoff-{timestamp}",
     job_type = "eval",
 )
 wandb.log({
@@ -263,6 +269,6 @@ wandb.log({
 })
 wandb.finish()
 
-with open("/kaggle/working/h2_gpt2medium_eval_cacheoff_summary.json", "w") as f:
+with open(f"/kaggle/working/h2_{MODEL_TAG}_eval_cacheoff_summary.json", "w") as f:
     json.dump(results, f, indent=2)
-print("\nSaved to /kaggle/working/h2_eval_cacheoff_summary.json")
+print(f"\nSaved to /kaggle/working/h2_{MODEL_TAG}_eval_cacheoff_summary.json")

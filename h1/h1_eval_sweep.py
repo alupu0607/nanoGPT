@@ -42,36 +42,53 @@ def load_checkpoint(L, m, task):
         model.eval().to(DEVICE)
         for p in model.parameters():
             p.requires_grad = False
-        return model, None
+        return model, None, {
+            "model_type": MODEL_TYPE,
+            "block_size": model.config.block_size,
+            "prefix_len": 0,
+        }
 
     local_dir = download_artifact(L, m, task)
     if local_dir is None:
-        return None, None
+        return None, None, None
 
-    model = GPT.from_pretrained(MODEL_TYPE, dict(dropout=DROPOUT))
-    if L > 0:
-        effective_block_size = MAX_POSITIONS- L
-        model.crop_block_size(effective_block_size)
+    prefix_path = os.path.join(local_dir, "prefix_P.pt")
+    if not os.path.exists(prefix_path):
+        print(f"  No prefix_P.pt found for L={L}")
+        return None, None, None
 
+    saved = torch.load(prefix_path, map_location="cpu")
+    saved_model_type = saved.get("model", MODEL_TYPE)
+    saved_prefix_len = int(saved.get("prefix_len", L))
+    saved_block_size = int(saved.get("block_size", MAX_POSITIONS))
+
+    # Position-free branch: prefix vectors do not use GPT-2 positions, so
+    # real tokens retain positions 0..T-1 and the model must not be cropped.
+    model = GPT.from_pretrained(saved_model_type, dict(dropout=DROPOUT))
     model.eval().to(DEVICE)
     for p in model.parameters():
         p.requires_grad = False
 
-    soft_prefix = None
-    if L > 0:
-        prefix_path = os.path.join(local_dir, "prefix_P.pt")
-        if not os.path.exists(prefix_path):
-            print(f"  No prefix_P.pt found for L={L}")
-            return model, None
+    P_tensor = saved.get("P")
+    if P_tensor is None:
+        print(f"  Checkpoint has no prefix tensor for L={L}")
+        return None, None, None
+    if P_tensor.shape != (saved_prefix_len, model.config.n_embd):
+        raise ValueError(
+            f"Loaded prefix has shape {tuple(P_tensor.shape)}, expected "
+            f"({saved_prefix_len}, {model.config.n_embd})"
+        )
 
-        saved = torch.load(prefix_path, map_location=DEVICE)
-        P_tensor = saved['P']
+    soft_prefix = SoftPrefix(saved_prefix_len, model.config.n_embd, DEVICE)
+    with torch.no_grad():
+        soft_prefix.P.copy_(P_tensor.to(DEVICE))
+    soft_prefix.eval()
 
-        soft_prefix = SoftPrefix(L, model.config.n_embd, DEVICE)
-        soft_prefix.P = torch.nn.Parameter(P_tensor.to(DEVICE))
-        soft_prefix.to(DEVICE)
-
-    return model, soft_prefix
+    return model, soft_prefix, {
+        "model_type": saved_model_type,
+        "block_size": saved_block_size,
+        "prefix_len": saved_prefix_len,
+    }
 
 
 def get_training_metrics(L, m, task):
@@ -109,8 +126,9 @@ def get_training_metrics(L, m, task):
 
 
 def estimate_val_perplexity(model, soft_prefix, data_path,
+                             token_block_size,
                              batch_size=6, eval_iters=50):
-    block_size = model.config.block_size  # use whatever the model was trained with
+    block_size = min(token_block_size, model.config.block_size)
     data       = np.memmap(data_path, dtype=np.uint16, mode='r')
     ctx        = torch.amp.autocast(device_type='cuda', dtype=torch.float16)
     losses     = []
@@ -144,20 +162,33 @@ for L in L_VALUES:
         continue
 
     print(f"\nEvaluating L={L}, m={M_FIXED}...")
-    model, soft_prefix = load_checkpoint(L, M_FIXED, TASK)
+    model, soft_prefix, metadata = load_checkpoint(L, M_FIXED, TASK)
     if model is None:
         continue
-    print(f"  model.config.block_size={model.config.block_size}, prefix_len={L}")
-    val_loss, val_ppl = estimate_val_perplexity(model, soft_prefix, val_data)
-    param_count       = L * 768
+    print(
+        f"  model={metadata['model_type']} "
+        f"token_block_size={metadata['block_size']} "
+        f"prefix_len={metadata['prefix_len']} "
+        f"position_mode=positionfree"
+    )
+    val_loss, val_ppl = estimate_val_perplexity(
+        model,
+        soft_prefix,
+        val_data,
+        token_block_size=metadata["block_size"],
+    )
+    param_count = metadata["prefix_len"] * model.config.n_embd
 
     r = {
-        "L":           L,
+        "L":           metadata["prefix_len"],
         "m":           M_FIXED,
         "val_loss":    round(val_loss, 4),
         "val_ppl":     round(val_ppl, 2),
         "param_count": param_count,
         "task":        TASK,
+        "method":      "positionfree",
+        "model_type":  metadata["model_type"],
+        "token_block_size": metadata["block_size"],
     }
     r.update(get_training_metrics(L, M_FIXED, TASK))
     results.append(r)

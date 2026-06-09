@@ -49,6 +49,8 @@ for L in RUN_ORDER:
         "python", "train.py", "config/h1_wikitext2.py",
         f"--prefix_len={L}",
         f"--prefix_update_period={M_FIXED}",
+        "--prefix_cache=False",
+        "--prefix_type=soft",
         f"--out_dir={out_dir}",
         f"--wandb_run_name={run_name}",
     ] + extra_flags
@@ -70,7 +72,7 @@ for L in RUN_ORDER:
         ckpt     = torch.load(prefix_path, map_location="cpu")
         val_loss = float(ckpt.get("val_loss", float("nan")))
         val_ppl  = math.exp(val_loss) if not math.isnan(val_loss) else float("nan")
-        peak_mem = torch.cuda.max_memory_allocated() / 1e9
+        peak_mem = float(ckpt.get("peak_gpu_mem_gb", float("nan")))
 
         results.append({
             "L":            L,

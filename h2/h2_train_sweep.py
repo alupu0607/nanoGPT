@@ -4,7 +4,7 @@ import subprocess, os, time, torch, json, math
 # M_VALUES = [1, 5, 10, 20]
 
 RUN_ORDER  = [760, 512, 256]
-M_VALUES = [1,5,10, 20]
+M_VALUES = [10, 20]
 TASK      = "wikitext2"
 
 results         = []

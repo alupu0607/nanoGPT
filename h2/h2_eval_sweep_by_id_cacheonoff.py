@@ -85,6 +85,12 @@ api = wandb.Api()
 ENTITY = api.default_entity
 print(f"W&B entity: {ENTITY}")
 
+SEED = 1337
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
 
 def parse_run_identity(run):
     match = re.search(
